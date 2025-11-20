@@ -1,0 +1,73 @@
+const API = process.env.NEXT_PUBLIC_API_URL;
+
+// ------------------------------------------
+// 1) 포인트 적립
+// ------------------------------------------
+export async function depositPoint(dto: { amount: number; reason?: string }) {
+  const res = await fetch(`${API}/points/deposit`, {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(dto),
+  });
+
+  if (!res.ok) throw new Error("포인트 적립 실패");
+  return res.json();
+}
+
+// ------------------------------------------
+// 2) 포인트 환전 요청
+// ------------------------------------------
+export async function requestPointExchange(dto: {
+  exchangeAmount: number;
+  accountNum: string;
+  bankCode: string;
+}) {
+  const res = await fetch(`${API}/points/exchange`, {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(dto),
+  });
+
+  if (!res.ok) throw new Error("환전 요청 실패");
+  return res.json();
+}
+
+// ------------------------------------------
+// 3) 포인트 내역 조회 (타입 적용)
+// ------------------------------------------
+
+export interface PointExchangeHistoryQuery {
+  username?: string;
+  period?: "ALL" | "WEEK" | "MONTH" | "THREE_MONTHS";
+  sort?: "DESC" | "ASC";
+  status?:
+    | "ALL"
+    | "DEPOSIT"
+    | "WITHDRAW_APPLY"
+    | "WITHDRAW_SUCCESS"
+    | "WITHDRAW_FAILED";
+  page?: number;
+  size?: number;
+}
+
+export async function getPointHistory(
+  query: PointExchangeHistoryQuery = {}
+) {
+  const params = new URLSearchParams(
+    query as Record<string, string>
+  ).toString();
+
+  const res = await fetch(`${API}/points/history?${params}`, {
+    credentials: "include",
+  });
+
+  if (!res.ok) throw new Error("포인트 이력 조회 실패");
+  return res.json();
+}
+
