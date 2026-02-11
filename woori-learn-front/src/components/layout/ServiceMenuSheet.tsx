@@ -1,16 +1,15 @@
 "use client";
-
-import { useEffect, useState } from "react";
+import { useState, useEffect } from "react";
 import Image from "next/image";
-import { MENU_TAGS, SERVICE_MENU_ITEMS } from "@/constants/menu";
+import { SERVICE_MENU_ITEMS, MENU_TAGS } from "@/constants/menu";
 
-type ServiceMenuSheetProps = {
+interface ServiceMenuSheetProps {
   isOpen: boolean;
   onClose: () => void;
   userName?: string;
-  onNavigate: (route: string) => void;
+  onNavigate: (path: string) => void | Promise<void>;
   onOpenNotice: (message: string) => void;
-};
+}
 
 const TRANSITION_DURATION = 220;
 
@@ -105,6 +104,7 @@ export function ServiceMenuSheet({
                   className="w-full cursor-pointer text-left transition hover:text-primary-500"
                   onClick={() => {
                     if (item === "자동이체") {
+                      void onNavigate("/automaticpayment-scenario");
                       onNavigate("/automaticpayment-scenario");
                       onClose();
                       return;
@@ -122,5 +122,4 @@ export function ServiceMenuSheet({
     </div>
   );
 }
-
 
