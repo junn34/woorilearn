@@ -1,18 +1,18 @@
-우리런 (WeLearn)
+# 우리런 (WeLearn)
 
 실제 금융 업무 흐름을 기반으로 설계된 시나리오형 금융 학습 플랫폼
 단순 UI 시뮬레이션이 아닌, 실제 백엔드 API와 데이터 처리 구조를 기반으로 동작하는 금융 체험 서비스
 
 <img width="368" height="507" alt="Image" src="https://github.com/user-attachments/assets/26ca5f0e-115a-4d08-884a-77b7cecfa14c" />
 
-●  Overview
+# ● Overview
 
 우리런은 금융 서비스 이용 경험이 부족한 사용자가
 위험 부담 없는 가상 환경에서 송금·계좌조회·자동이체 등의 금융 업무를 직접 체험할 수 있도록 설계된 플랫폼입니다.
 
 본 프로젝트는 기능 구현보다 금융 서비스의 신뢰와 무결성을 기준으로 설계하는 것에 초점을 두었습니다.
 
-● Core Features
+# ● Core Features
 1. 시나리오 기반 금융 체험
 
 실제 금융 업무 흐름을 반영한 단계별 시나리오 구성
@@ -35,13 +35,13 @@
 
 재화 성격 데이터를 고려한 무결성 보장 설계 적용
 
-●  Service Architecture
+# ●  Service Architecture
 민감 데이터 보호를 고려한 하이브리드 아키텍처 기반 운영 구조
 
 <img width="928" height="363" alt="Image" src="https://github.com/user-attachments/assets/e7a4bab8-82d1-4abe-9f32-e0282dd6dd0e" />
 
-●  Design for Reliability
-1. 동시 요청 환경에서 단일 결과를 보장한 데이터 설계
+# ●  Design for Reliability
+### 1. 동시 요청 환경에서 단일 결과를 보장한 데이터 설계
 
 포인트 지급/환전 과정에서 동시 요청 시 중복 지급 가능성 발견
 
@@ -51,17 +51,17 @@ UNIQUE 제약 조건을 통한 중복 트랜잭션 사전 차단
 
 트랜잭션 경계 명확화로 단일 결과 보장
 
-→ 동시 요청 환경에서도 포인트 무결성 유지
+동시 요청 환경에서도 포인트 무결성 유지
 
-2. 민감도 기반 캐시 분리 전략
+### 2. 민감도 기반 캐시 분리 전략
 
-조회 빈도가 높은 비민감 데이터는 Redis TTL 캐시 적용
+조회 빈도가 높은 비민감 데이터는 캐시 적용
 
 계좌 정보·재화 관련 데이터는 캐시 제외
 
 성능 개선과 보안 리스크를 동시에 고려한 구조
 
-3. 운영 리스크를 줄이기 위한 CI/CD 구조
+### 3. 운영 리스크를 줄이기 위한 CI/CD 구조
 
 Jenkins 기반 자동 배포 파이프라인 구축
 
@@ -71,13 +71,11 @@ Jenkins 기반 자동 배포 파이프라인 구축
 
 반복 수동 배포 제거로 배포 리드타임 단축
 
-● Testing & Stability
+# ● Testing & Stability
 
 상태 변경이 수반되는 핵심 로직 중심 테스트 설계
 
-(JaCoCo 커버리지 수치 있으면 여기에 추가)
-
-동시성 상황 재현 테스트 수행
+<img width="908" height="398" alt="Image" src="https://github.com/user-attachments/assets/bccbec70-70bc-4eee-83b7-8741655e5f0b" />
 
 ● Tech Stack
 
