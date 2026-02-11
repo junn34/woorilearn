@@ -2,374 +2,317 @@ package dev.woori.wooriLearn.domain.account.service;
 
 import dev.woori.wooriLearn.config.exception.CommonException;
 import dev.woori.wooriLearn.config.exception.ErrorCode;
-import dev.woori.wooriLearn.config.response.PageResponse;
-import dev.woori.wooriLearn.domain.account.dto.PointsExchangeRequestDto;
-import dev.woori.wooriLearn.domain.account.dto.PointsExchangeResponseDto;
-import dev.woori.wooriLearn.domain.account.dto.PointsHistorySearchRequestDto;
-import dev.woori.wooriLearn.domain.account.entity.*;
+import dev.woori.wooriLearn.domain.account.dto.ExchangeProcessContext;
+import dev.woori.wooriLearn.domain.account.dto.external.response.BankTransferResDto;
+import dev.woori.wooriLearn.domain.account.dto.request.PointsExchangeRequestDto;
+import dev.woori.wooriLearn.domain.account.dto.response.PointsExchangeResponseDto;
+import dev.woori.wooriLearn.domain.account.entity.Account;
+import dev.woori.wooriLearn.domain.account.entity.PointsFailReason;
+import dev.woori.wooriLearn.domain.account.entity.PointsHistory;
+import dev.woori.wooriLearn.domain.account.entity.PointsHistoryType;
+import dev.woori.wooriLearn.domain.account.entity.PointsStatus;
 import dev.woori.wooriLearn.domain.account.repository.AccountRepository;
 import dev.woori.wooriLearn.domain.account.repository.PointsHistoryRepository;
 import dev.woori.wooriLearn.domain.auth.entity.AuthUsers;
+import dev.woori.wooriLearn.domain.auth.entity.Role;
 import dev.woori.wooriLearn.domain.user.entity.Users;
 import dev.woori.wooriLearn.domain.user.repository.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
-import org.springframework.data.domain.Page;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.MockitoAnnotations;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
-import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDateTime;
-import java.time.ZoneOffset;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.Optional;
 
-import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 class PointsExchangeServiceTest {
 
-    PointsHistoryRepository pointsHistoryRepository = mock(PointsHistoryRepository.class);
-    UserRepository userRepository = mock(UserRepository.class);
-    AccountRepository accountRepository = mock(AccountRepository.class);
+    @InjectMocks
+    private PointsExchangeService service;
 
-    Clock fixedClock;
-    PointsExchangeService service;
+    @Mock
+    private PointsHistoryRepository pointsHistoryRepository;
+    @Mock
+    private UserRepository userRepository;
+    @Mock
+    private AccountRepository accountRepository;
+
+    private Users user;
+    private Account account;
+
+    private final Clock fixedClock = Clock.fixed(Instant.parse("2025-12-03T09:00:00Z"), ZoneId.of("UTC"));
 
     @BeforeEach
     void setUp() {
-        fixedClock = Clock.fixed(Instant.parse("2025-01-01T00:00:00Z"), ZoneOffset.UTC);
+        MockitoAnnotations.openMocks(this);
+        // inject fixed clock
         service = new PointsExchangeService(fixedClock, pointsHistoryRepository, userRepository, accountRepository);
-    }
 
-    private Users user(long id, int points) {
-        return Users.builder()
-                .id(id)
-                .authUser(AuthUsers.builder().userId("userId").build())
+        user = Users.builder()
+                .id(1L)
+                .authUser(AuthUsers.builder()
+                        .id(2L)
+                        .userId("user")
+                        .password("pw")
+                        .role(Role.ROLE_USER)
+                        .build())
+                .userId("user")
                 .nickname("nick")
-                .points(points)
+                .points(1_000)
                 .build();
-    }
 
-    private Account account(long id, Users owner, String number) {
-        return Account.builder()
-                .id(id)
-                .user(owner)
-                .accountNumber(number)
-                .bankCode("001")
-                .accountName("계좌")
+        account = Account.builder()
+                .id(3L)
+                .user(user)
+                .accountNumber("123-456")
+                .bankCode("020")
+                .accountName("name")
                 .build();
     }
 
     @Test
-    @DisplayName("현금화 신청 성공: WITHDRAW/APPLY 히스토리 저장")
+    @DisplayName("포인트 출금 신청 성공 시 요청 ID와 잔액을 반환한다")
     void requestExchange_success() {
-        // given
-        String username = "u1";
-        Users u = user(1L, 1000);
-        when(userRepository.findByUserIdForUpdate(username)).thenReturn(Optional.of(u));
-
-        Account acc = account(10L, u, "123-456");
-        when(accountRepository.findByAccountNumber("123-456")).thenReturn(Optional.of(acc));
+        PointsExchangeRequestDto dto = new PointsExchangeRequestDto(500, account.getAccountNumber(), "020");
+        when(userRepository.findByUserIdForUpdate("user")).thenReturn(Optional.of(user));
+        when(accountRepository.findByAccountNumber(account.getAccountNumber())).thenReturn(Optional.of(account));
 
         PointsHistory saved = PointsHistory.builder()
-                .id(77L)
-                .user(u)
-                .amount(300)
-                .type(PointsHistoryType.WITHDRAW)
+                .id(11L)
+                .user(user)
+                .amount(dto.exchangeAmount())
                 .status(PointsStatus.APPLY)
+                .type(PointsHistoryType.WITHDRAW)
+                .accountNumber(account.getAccountNumber())
                 .build();
         when(pointsHistoryRepository.save(any(PointsHistory.class))).thenReturn(saved);
 
-        PointsExchangeRequestDto dto = new PointsExchangeRequestDto(300, "123-456", "001");
+        PointsExchangeResponseDto res = service.requestExchange("user", dto);
 
-        // when
-        PointsExchangeResponseDto res = service.requestExchange(username, dto);
-
-        // then
-        ArgumentCaptor<PointsHistory> captor = ArgumentCaptor.forClass(PointsHistory.class);
-        verify(pointsHistoryRepository).save(captor.capture());
-        PointsHistory toSave = captor.getValue();
-        assertThat(toSave.getUser().getId()).isEqualTo(1L);
-        assertThat(toSave.getAmount()).isEqualTo(300);
-        assertThat(toSave.getType()).isEqualTo(PointsHistoryType.WITHDRAW);
-        assertThat(toSave.getStatus()).isEqualTo(PointsStatus.APPLY);
-
-        assertThat(res.requestId()).isEqualTo(77L);
-        assertThat(res.userId()).isEqualTo(1L);
-        assertThat(res.exchangeAmount()).isEqualTo(300);
-        assertThat(res.status()).isEqualTo(PointsStatus.APPLY);
+        assertEquals(11L, res.requestId());
+        assertEquals(PointsStatus.APPLY, res.status());
+        assertEquals(500, res.exchangeAmount());
+        assertEquals(500, res.currentBalance()); // 1000 - 500
+        verify(pointsHistoryRepository).save(any());
     }
 
     @Test
-    @DisplayName("현금화 신청 실패: 잔액 부족(CONFLICT)")
+    @DisplayName("출금 금액이 0 이하이면 INVALID_REQUEST 예외를 던진다")
+    void requestExchange_invalidAmount() {
+        PointsExchangeRequestDto dto = new PointsExchangeRequestDto(0, account.getAccountNumber(), "020");
+        when(userRepository.findByUserIdForUpdate("user")).thenReturn(Optional.of(user));
+
+        CommonException ex = assertThrows(CommonException.class, () -> service.requestExchange("user", dto));
+        assertEquals(ErrorCode.INVALID_REQUEST, ex.getErrorCode());
+    }
+
+    @Test
+    @DisplayName("보유 포인트보다 큰 금액을 출금하면 CONFLICT 예외를 던진다")
     void requestExchange_insufficientPoints() {
-        String username = "u1";
-        Users u = user(1L, 100); // 부족
-        when(userRepository.findByUserIdForUpdate(username)).thenReturn(Optional.of(u));
+        user = Users.builder()
+                .id(1L)
+                .authUser(user.getAuthUser())
+                .userId(user.getUserId())
+                .nickname(user.getNickname())
+                .points(100)
+                .build();
+        PointsExchangeRequestDto dto = new PointsExchangeRequestDto(500, account.getAccountNumber(), "020");
+        when(userRepository.findByUserIdForUpdate("user")).thenReturn(Optional.of(user));
 
-        PointsExchangeRequestDto dto = new PointsExchangeRequestDto(300, "123-456", "001");
-
-        CommonException ex = assertThrows(CommonException.class, () -> service.requestExchange(username, dto));
-        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.CONFLICT);
+        CommonException ex = assertThrows(CommonException.class, () -> service.requestExchange("user", dto));
+        assertEquals(ErrorCode.CONFLICT, ex.getErrorCode());
     }
 
     @Test
-    @DisplayName("현금화 신청 실패: 금액 null → INVALID_REQUEST (순서 수정 필요)")
-    void requestExchange_invalidAmount_null() {
-        String username = "u1";
-        Users u = user(1L, 1000);
-        when(userRepository.findByUserIdForUpdate(username)).thenReturn(Optional.of(u));
-
-        PointsExchangeRequestDto dto = new PointsExchangeRequestDto(null, "123-456", "001");
-
-        // 현재 구현은 NPE 가능. 금액 검증을 먼저 하도록 서비스 수정 후 통과.
-        CommonException ex = assertThrows(CommonException.class, () -> service.requestExchange(username, dto));
-        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.INVALID_REQUEST);
-    }
-
-    @Test
-    @DisplayName("현금화 신청 실패: 금액 0/음수 → INVALID_REQUEST (순서 수정 권장)")
-    void requestExchange_invalidAmount_nonPositive() {
-        String username = "u1";
-        Users u = user(1L, 1000);
-        when(userRepository.findByUserIdForUpdate(username)).thenReturn(Optional.of(u));
-
-        CommonException ex1 = assertThrows(CommonException.class,
-                () -> service.requestExchange(username, new PointsExchangeRequestDto(0, "123-456", "001")));
-        assertThat(ex1.getErrorCode()).isEqualTo(ErrorCode.INVALID_REQUEST);
-
-        CommonException ex2 = assertThrows(CommonException.class,
-                () -> service.requestExchange(username, new PointsExchangeRequestDto(-10, "123-456", "001")));
-        assertThat(ex2.getErrorCode()).isEqualTo(ErrorCode.INVALID_REQUEST);
-    }
-
-    @Test
-    @DisplayName("현금화 신청 실패: 계좌 미존재 → ENTITY_NOT_FOUND")
+    @DisplayName("계좌를 찾지 못하면 ENTITY_NOT_FOUND 예외를 던진다")
     void requestExchange_accountNotFound() {
-        String username = "u1";
-        Users u = user(1L, 1000);
-        when(userRepository.findByUserIdForUpdate(username)).thenReturn(Optional.of(u));
-        when(accountRepository.findByAccountNumber("nope")).thenReturn(Optional.empty());
+        PointsExchangeRequestDto dto = new PointsExchangeRequestDto(100, account.getAccountNumber(), "020");
+        when(userRepository.findByUserIdForUpdate("user")).thenReturn(Optional.of(user));
+        when(accountRepository.findByAccountNumber(account.getAccountNumber())).thenReturn(Optional.empty());
 
-        PointsExchangeRequestDto dto = new PointsExchangeRequestDto(100, "nope", "001");
-
-        CommonException ex = assertThrows(CommonException.class, () -> service.requestExchange(username, dto));
-        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.ENTITY_NOT_FOUND);
+        CommonException ex = assertThrows(CommonException.class, () -> service.requestExchange("user", dto));
+        assertEquals(ErrorCode.ENTITY_NOT_FOUND, ex.getErrorCode());
     }
 
     @Test
-    @DisplayName("현금화 신청 실패: 계좌 소유자 불일치 → FORBIDDEN")
-    void requestExchange_accountOwnerMismatch() {
-        String username = "u1";
-        Users u = user(1L, 1000);
-        when(userRepository.findByUserIdForUpdate(username)).thenReturn(Optional.of(u));
-
-        Users other = user(2L, 500);
-        Account acc = account(10L, other, "123-456");
-        when(accountRepository.findByAccountNumber("123-456")).thenReturn(Optional.of(acc));
-
-        PointsExchangeRequestDto dto = new PointsExchangeRequestDto(100, "123-456", "001");
-
-        CommonException ex = assertThrows(CommonException.class, () -> service.requestExchange(username, dto));
-        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.FORBIDDEN);
-    }
-
-    @Test
-    @DisplayName("현금화 승인 성공: SUCCESS, processedAt = fixedClock")
-    void approveExchange_success() {
-        // given history(APPLY) + user(points 충분)
-        Users u = user(1L, 1000);
-        PointsHistory history = PointsHistory.builder()
-                .id(99L).user(u).amount(200)
-                .type(PointsHistoryType.WITHDRAW)
-                .status(PointsStatus.APPLY)
+    @DisplayName("다른 사용자의 계좌로 출금 요청 시 FORBIDDEN 예외를 던진다")
+    void requestExchange_accountOwnedByOther_throwsForbidden() {
+        PointsExchangeRequestDto dto = new PointsExchangeRequestDto(100, account.getAccountNumber(), "020");
+        Users another = Users.builder()
+                .id(99L)
+                .authUser(user.getAuthUser())
+                .userId("other")
+                .nickname("other")
+                .points(0)
                 .build();
-
-        when(pointsHistoryRepository.findById(99L)).thenReturn(Optional.of(history));
-        when(userRepository.findByIdForUpdate(1L)).thenReturn(Optional.of(u));
-        when(pointsHistoryRepository.findAndLockById(99L)).thenReturn(Optional.of(history));
-        when(pointsHistoryRepository.findAndLockById(anyLong())).thenReturn(Optional.of(history));
-        when(userRepository.findByIdForUpdate(1L)).thenReturn(Optional.of(u));
-        when(userRepository.findByIdForUpdate(anyLong())).thenReturn(Optional.of(u));
-        when(userRepository.findByIdForUpdate(1L)).thenReturn(Optional.of(u));
-        when(userRepository.findByIdForUpdate(1L)).thenReturn(Optional.of(u));
-
-        // when
-        PointsExchangeResponseDto res = service.approveExchange(99L);
-
-        // then
-        assertThat(history.getStatus()).isEqualTo(PointsStatus.SUCCESS);
-        LocalDateTime expected = LocalDateTime.ofInstant(fixedClock.instant(), ZoneOffset.UTC);
-        assertThat(history.getProcessedAt()).isEqualTo(expected);
-
-        assertThat(res.status()).isEqualTo(PointsStatus.SUCCESS);
-        assertThat(res.userId()).isEqualTo(1L);
-        assertThat(res.exchangeAmount()).isEqualTo(200);
-        assertThat(res.processedDate()).isEqualTo(expected);
-    }
-
-    @Test
-    @DisplayName("현금화 승인 실패: APPLY 아님 → CONFLICT")
-    void approveExchange_statusNotApply() {
-        Users u = user(1L, 1000);
-        PointsHistory history = PointsHistory.builder()
-                .id(99L).user(u).amount(200)
-                .type(PointsHistoryType.WITHDRAW)
-                .status(PointsStatus.SUCCESS) // 이미 처리됨
+        Account otherAccount = Account.builder()
+                .id(30L)
+                .user(another)
+                .accountNumber(account.getAccountNumber())
+                .bankCode(account.getBankCode())
+                .accountName(account.getAccountName())
                 .build();
+        when(userRepository.findByUserIdForUpdate("user")).thenReturn(Optional.of(user));
+        when(accountRepository.findByAccountNumber(account.getAccountNumber())).thenReturn(Optional.of(otherAccount));
 
-        when(pointsHistoryRepository.findById(99L)).thenReturn(Optional.of(history));
-        when(pointsHistoryRepository.findAndLockById(99L)).thenReturn(Optional.of(history));
-
-        CommonException ex = assertThrows(CommonException.class, () -> service.approveExchange(99L));
-        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.CONFLICT);
+        CommonException ex = assertThrows(CommonException.class, () -> service.requestExchange("user", dto));
+        assertEquals(ErrorCode.FORBIDDEN, ex.getErrorCode());
     }
 
     @Test
-    @DisplayName("현금화 승인 실패: 잔액 부족 → FAILED(INSUFFICIENT_POINTS)")
-    void approveExchange_insufficientPoints_marksFailed() {
-        Users u = user(1L, 100); // 부족
+    @DisplayName("상태가 APPLY가 아니면 이체 준비에서 CONFLICT 예외를 던진다")
+    void prepareTransfer_statusNotApply_throwsConflict() {
         PointsHistory history = PointsHistory.builder()
-                .id(99L).user(u).amount(200)
-                .type(PointsHistoryType.WITHDRAW)
-                .status(PointsStatus.APPLY)
-                .build();
-
-        when(pointsHistoryRepository.findById(99L)).thenReturn(Optional.of(history));
-        when(pointsHistoryRepository.findAndLockById(99L)).thenReturn(Optional.of(history));
-        when(userRepository.findByIdForUpdate(1L)).thenReturn(Optional.of(u));
-
-        PointsExchangeResponseDto res = service.approveExchange(99L);
-
-        assertThat(history.getStatus()).isEqualTo(PointsStatus.FAILED);
-        assertThat(res.status()).isEqualTo(PointsStatus.FAILED);
-        assertThat(history.getFailReason()).isEqualTo(PointsFailReason.INSUFFICIENT_POINTS);
-        assertThat(res.exchangeAmount()).isEqualTo(200);
-        assertThat(res.userId()).isEqualTo(1L);
-    }
-
-    @Test
-    @DisplayName("현금화 승인 실패: 기타 처리 오류 → FAILED(PROCESSING_ERROR)")
-    void approveExchange_processingError_marksFailed() {
-        // Users.subtractPoints는 amount <= 0이면 INVALID_REQUEST 예외를 던짐
-        Users u = user(1L, 1000);
-        PointsHistory history = PointsHistory.builder()
-                .id(99L).user(u).amount(0) // 비정상 데이터로 처리 오류 유도
-                .type(PointsHistoryType.WITHDRAW)
-                .status(PointsStatus.APPLY)
-                .build();
-
-        when(pointsHistoryRepository.findById(99L)).thenReturn(Optional.of(history));
-        when(pointsHistoryRepository.findAndLockById(99L)).thenReturn(Optional.of(history));
-        when(userRepository.findByIdForUpdate(1L)).thenReturn(Optional.of(u));
-
-        PointsExchangeResponseDto res = service.approveExchange(99L);
-        assertThat(history.getStatus()).isEqualTo(PointsStatus.FAILED);
-        assertThat(history.getFailReason()).isEqualTo(PointsFailReason.PROCESSING_ERROR);
-        assertThat(history.getProcessedAt()).isNotNull();
-        assertThat(res.status()).isEqualTo(PointsStatus.FAILED);
-        assertThat(res.processedDate()).isEqualTo(history.getProcessedAt());
-        assertThat(u.getPoints()).isEqualTo(1000);
-    }
-
-    @Test
-    @DisplayName("사용자의 포인트 내역 페이지 조회")
-    void getUserHistoryPage_shouldReturnPagedResult() {
-        // given
-        String username = "testUser";
-        Users user = user(1L, 1000);
-
-        // 기본값 사용 (status=ALL, sort=DESC, page=1, size=20)
-        PointsHistorySearchRequestDto requestDto = new PointsHistorySearchRequestDto(
-                null, null, null, null, null, null, null, null
-        );
-        when(userRepository.findByUserId(username)).thenReturn(Optional.of(user));
-
-        PointsHistory ph = PointsHistory.builder()
+                .id(1L)
                 .user(user)
-                .amount(500)
-                .status(PointsStatus.APPLY)
-                .type(PointsHistoryType.WITHDRAW)
+                .amount(100)
+                .status(PointsStatus.SUCCESS)
+                .accountNumber(account.getAccountNumber())
                 .build();
+        when(pointsHistoryRepository.findAndLockById(1L)).thenReturn(Optional.of(history));
 
-        // ReflectionTestUtils로 BaseEntity 필드 세팅
-        ReflectionTestUtils.setField(ph, "id", 100L);
-        ReflectionTestUtils.setField(ph, "createdAt", LocalDateTime.now());
-
-        Page<PointsHistory> pageResult = new PageImpl<>(List.of(ph));
-        when(pointsHistoryRepository.findAllByFilters(
-                any(), any(), any(), any(), any(), any()
-        )).thenReturn(pageResult);
-
-        // when
-        PageResponse<PointsExchangeResponseDto> result =
-                service.getUserHistoryPage(username, requestDto);
-
-        // then
-        assertNotNull(result);
-        assertEquals(1, result.items().size());
-        verify(pointsHistoryRepository, times(1))
-                .findAllByFilters(eq(user.getId()), any(), any(), any(), any(), any(PageRequest.class));
+        CommonException ex = assertThrows(CommonException.class, () -> service.prepareTransfer(1L));
+        assertEquals(ErrorCode.CONFLICT, ex.getErrorCode());
     }
 
     @Test
-    @DisplayName("관리자의 포인트 내역 페이지 조회")
-    void getAdminHistoryPage_shouldReturnPagedResult() {
-        // given - users
-        Users user1 = user(1L, 1000);
-        Users user2 = user(2L, 2000);
-
-        userRepository.save(user1);
-        userRepository.save(user2);
-
-        // given - points history
-        PointsHistory ph1 = PointsHistory.builder()
-                .user(user1)
-                .amount(200)
-                .status(PointsStatus.SUCCESS)
-                .type(PointsHistoryType.WITHDRAW)
-                .build();
-        PointsHistory ph2 = PointsHistory.builder()
-                .user(user2)
+    @DisplayName("이체 준비 성공 시 상태를 PROCESSING으로 바꾸고 컨텍스트를 반환한다")
+    void prepareTransfer_success_marksProcessing() {
+        PointsHistory history = PointsHistory.builder()
+                .id(1L)
+                .user(user)
                 .amount(100)
                 .status(PointsStatus.APPLY)
-                .type(PointsHistoryType.WITHDRAW)
+                .accountNumber(account.getAccountNumber())
                 .build();
+        when(pointsHistoryRepository.findAndLockById(1L)).thenReturn(Optional.of(history));
+        when(userRepository.findByIdForUpdate(user.getId())).thenReturn(Optional.of(user));
+        when(accountRepository.findByAccountNumber(account.getAccountNumber())).thenReturn(Optional.of(account));
 
-        ReflectionTestUtils.setField(ph1, "id", 101L);
-        ReflectionTestUtils.setField(ph1, "createdAt", LocalDateTime.now());
-        ReflectionTestUtils.setField(ph2, "id", 102L);
-        ReflectionTestUtils.setField(ph2, "createdAt", LocalDateTime.now());
+        ExchangeProcessContext ctx = service.prepareTransfer(1L);
 
-        pointsHistoryRepository.save(ph1);
-        pointsHistoryRepository.save(ph2);
+        assertEquals(PointsStatus.PROCESSING, history.getStatus());
+        assertEquals(account.getAccountNumber(), ctx.accountNum());
+        assertEquals(100, ctx.amount());
+    }
 
-        Page<PointsHistory> pageResult = new PageImpl<>(List.of(ph1, ph2));
-        when(pointsHistoryRepository.findAllByFilters(
-                any(), any(), any(), any(), any(), any()
-        )).thenReturn(pageResult);
+    @Test
+    @DisplayName("계좌 이체 성공 응답을 받으면 상태를 SUCCESS로 변경한다")
+    void processResult_successResponse_marksSuccess() {
+        PointsHistory history = PointsHistory.builder()
+                .id(1L)
+                .user(user)
+                .amount(200)
+                .status(PointsStatus.PROCESSING)
+                .accountNumber(account.getAccountNumber())
+                .build();
+        when(pointsHistoryRepository.findAndLockById(1L)).thenReturn(Optional.of(history));
+        when(userRepository.findByUserIdForUpdate(user.getUserId())).thenReturn(Optional.of(user));
 
-        PointsHistorySearchRequestDto requestDto = new PointsHistorySearchRequestDto(
-                null, null, null, null, null, 1, 20, null // 전체 조회
-        );
+        BankTransferResDto bankRes = new BankTransferResDto(200, true, "ok", null);
 
-        // when
-        PageResponse<PointsExchangeResponseDto> result =
-                service.getAdminHistoryPage(requestDto);
+        PointsExchangeResponseDto res = service.processResult(1L, bankRes);
 
-        // then
-        assertNotNull(result);
-        assertEquals(2, result.items().size());
+        assertEquals(PointsStatus.SUCCESS, history.getStatus());
+        assertNotNull(history.getProcessedAt());
+        assertEquals(PointsStatus.SUCCESS, res.status());
+    }
 
-        // 항목 검증
-        assertEquals(101L, result.items().get(0).requestId());
-        assertEquals(102L, result.items().get(1).requestId());
+    @Test
+    @DisplayName("이체 실패 시 상태를 FAILED로 두고 포인트를 환불한다")
+    void processResult_failure_refundsPoints() {
+        user = Users.builder()
+                .id(1L)
+                .authUser(user.getAuthUser())
+                .userId(user.getUserId())
+                .nickname(user.getNickname())
+                .points(0)
+                .build();
+        PointsHistory history = PointsHistory.builder()
+                .id(1L)
+                .user(user)
+                .amount(200)
+                .status(PointsStatus.PROCESSING)
+                .accountNumber(account.getAccountNumber())
+                .build();
+        when(pointsHistoryRepository.findAndLockById(1L)).thenReturn(Optional.of(history));
+        when(userRepository.findByUserIdForUpdate(user.getUserId())).thenReturn(Optional.of(user));
+
+        PointsExchangeResponseDto res = service.processResult(1L, null);
+
+        assertEquals(PointsStatus.FAILED, history.getStatus());
+        assertEquals(PointsFailReason.PROCESSING_ERROR, history.getFailReason());
+        assertEquals(200, res.currentBalance());
+        assertEquals(200, user.getPoints());
+    }
+
+    @Test
+    @DisplayName("processFailure 호출 시 실패 상태로 전환하고 환불한다")
+    void processFailure_marksFailedAndRefunds() {
+        user = Users.builder()
+                .id(1L)
+                .authUser(user.getAuthUser())
+                .userId(user.getUserId())
+                .nickname(user.getNickname())
+                .points(0)
+                .build();
+        PointsHistory history = PointsHistory.builder()
+                .id(1L)
+                .user(user)
+                .amount(150)
+                .status(PointsStatus.PROCESSING)
+                .accountNumber(account.getAccountNumber())
+                .build();
+        when(pointsHistoryRepository.findAndLockById(1L)).thenReturn(Optional.of(history));
+        when(userRepository.findByUserIdForUpdate(user.getUserId())).thenReturn(Optional.of(user));
+
+        PointsExchangeResponseDto res = service.processFailure(1L);
+
+        assertEquals(PointsStatus.FAILED, history.getStatus());
+        assertEquals(PointsFailReason.PROCESSING_ERROR, history.getFailReason());
+        assertEquals(150, user.getPoints());
+        assertEquals(PointsStatus.FAILED, res.status());
+    }
+
+    @Test
+    @DisplayName("대기 중인 출금 목록 조회는 기본 페이지 정보로 조회한다")
+    void getPendingWithdrawals_usesDefaultPaging() {
+        when(pointsHistoryRepository.findByTypeAndStatus(eq(PointsHistoryType.WITHDRAW), eq(PointsStatus.APPLY), any(PageRequest.class)))
+                .thenReturn(new PageImpl<>(List.of()));
+
+        service.getPendingWithdrawals(null, null);
+
+        ArgumentCaptor<PageRequest> captor = ArgumentCaptor.forClass(PageRequest.class);
+        verify(pointsHistoryRepository).findByTypeAndStatus(eq(PointsHistoryType.WITHDRAW), eq(PointsStatus.APPLY), captor.capture());
+        assertEquals(0, captor.getValue().getPageNumber());
+        assertEquals(20, captor.getValue().getPageSize());
+    }
+
+    @Test
+    @DisplayName("대기 중 출금 목록 조회 시 전달한 페이지 번호/크기를 사용한다")
+    void getPendingWithdrawals_customPaging() {
+        when(pointsHistoryRepository.findByTypeAndStatus(eq(PointsHistoryType.WITHDRAW), eq(PointsStatus.APPLY), any(PageRequest.class)))
+                .thenReturn(new PageImpl<>(List.of()));
+
+        service.getPendingWithdrawals(2, 5);
+
+        ArgumentCaptor<PageRequest> captor = ArgumentCaptor.forClass(PageRequest.class);
+        verify(pointsHistoryRepository).findByTypeAndStatus(eq(PointsHistoryType.WITHDRAW), eq(PointsStatus.APPLY), captor.capture());
+        assertEquals(1, captor.getValue().getPageNumber());
+        assertEquals(5, captor.getValue().getPageSize());
     }
 }

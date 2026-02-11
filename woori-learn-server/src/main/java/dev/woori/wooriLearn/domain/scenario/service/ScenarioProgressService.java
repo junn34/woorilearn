@@ -2,11 +2,14 @@ package dev.woori.wooriLearn.domain.scenario.service;
 
 import dev.woori.wooriLearn.config.exception.CommonException;
 import dev.woori.wooriLearn.config.exception.ErrorCode;
+import dev.woori.wooriLearn.domain.account.dto.request.PointsDepositRequestDto;
+import dev.woori.wooriLearn.domain.account.service.PointsDepositService;
 import dev.woori.wooriLearn.domain.scenario.content.StepMeta;
 import dev.woori.wooriLearn.domain.scenario.dto.AdvanceResDto;
 import dev.woori.wooriLearn.domain.scenario.dto.ProgressResumeResDto;
 import dev.woori.wooriLearn.domain.scenario.dto.ProgressSaveResDto;
 import dev.woori.wooriLearn.domain.scenario.dto.QuizResDto;
+import dev.woori.wooriLearn.domain.scenario.dto.ScenarioRewardResDto;
 import dev.woori.wooriLearn.domain.scenario.entity.*;
 import dev.woori.wooriLearn.domain.scenario.model.AdvanceStatus;
 import dev.woori.wooriLearn.domain.scenario.model.ChoiceInfo;
@@ -14,10 +17,13 @@ import dev.woori.wooriLearn.domain.scenario.repository.ScenarioCompletedReposito
 import dev.woori.wooriLearn.domain.scenario.repository.ScenarioProgressRepository;
 import dev.woori.wooriLearn.domain.scenario.repository.ScenarioRepository;
 import dev.woori.wooriLearn.domain.scenario.repository.ScenarioStepRepository;
+import dev.woori.wooriLearn.domain.scenario.service.processor.ContentInfo;
 import dev.woori.wooriLearn.domain.scenario.service.processor.StepProcessor;
 import dev.woori.wooriLearn.domain.scenario.service.processor.StepProcessorResolver;
 import dev.woori.wooriLearn.domain.user.entity.Users;
+import dev.woori.wooriLearn.domain.user.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -42,12 +48,15 @@ import java.util.*;
 @Service
 @RequiredArgsConstructor
 public class ScenarioProgressService {
-
+    private final UserRepository userRepository;
     private final ScenarioRepository scenarioRepository;
     private final ScenarioStepRepository stepRepository;
     private final ScenarioProgressRepository progressRepository;
     private final ScenarioCompletedRepository completedRepository;
+    private final PointsDepositService pointsDepositService;
 
+    private static final int SCENARIO_COMPLETION_REWARD_POINTS = 1000;
+    private static final int ALL_SCENARIOS_COMPLETION_REWARD_POINTS = 10000;
     // 스텝 타입/상태에 따라 적절한 StepProcessor를 찾아주는 Resolver
     private final StepProcessorResolver stepProcessorResolver;
 
@@ -108,7 +117,7 @@ public class ScenarioProgressService {
         Long startStepId = stepRepository.findStartStepOrFail(scenarioId).getId();
 
         // Processor에 넘길 Context 구성
-        StepContext ctx = new StepContext(user, scenario, current, answer, byId, progress, runtime.badBranch(), runtime.badEnding(), startStepId);
+        StepContext ctx = new StepContext(user, scenario, current, answer, byId, progress, runtime.badBranch(), runtime.badEnding(), startStepId, runtime.hasChoices());
 
         StepProcessor processor = stepProcessorResolver.resolve(ctx);
         return processor.process(ctx, this);
@@ -234,48 +243,123 @@ public class ScenarioProgressService {
         return Math.max(prev, roundedCandidate);
     }
 
-    /** 동일 유저/시나리오에 대해 완료 이력을 1회만 저장하도록 보장 */
-    void ensureCompletedOnce(Users user, Scenario scenario) {
-        if (!completedRepository.existsByUserAndScenario(user, scenario)) {
-            completedRepository.save(
+    /**
+     * 한 시나리오별로 최초 1회만 등록하도록 보장
+     */
+    boolean ensureCompletedOnce(Users user, Scenario scenario) {
+        try {
+            // saveAndFlush를 사용하여 DB 제약 조건 위반을 즉시 확인합니다.
+            completedRepository.saveAndFlush(
                     ScenarioCompleted.builder()
                             .user(user)
                             .scenario(scenario)
                             .build()
             );
+            return true; // 신규 완료
+        } catch (DataIntegrityViolationException e) {
+            // Unique constraint 위반은 이미 완료 이력이 존재함을 의미합니다.
+            // 이는 정상적인 중복 요청일 수 있으므로, false를 반환하여 중복 보상 지급을 방지합니다.
+            return false; // 이미 완료됨
         }
     }
 
     /** 외부 Processor가 진행 엔티티 저장만 필요할 때 사용 */
+    boolean ensureCompletedOnceInsertIgnore(Users user, Scenario scenario) {
+        int inserted = completedRepository.insertIgnore(user.getId(), scenario.getId());
+        return inserted > 0;
+    }
+
     void saveProgress(ScenarioProgress progress) {
         progressRepository.save(progress);
     }
-
+    private void grantCompletionRewards(Users user) {
+        // 개별 시나리오 완료 보상
+        pointsDepositService.depositPoints(
+                user.getUserId(),
+                new PointsDepositRequestDto(SCENARIO_COMPLETION_REWARD_POINTS, "시나리오 완료 보상")
+        );
+        // 전체 시나리오 완주 보상 (모든 시나리오 완료 시 1회)
+        long totalScenarioCount = scenarioRepository.count();
+        long userCompletedCount = completedRepository.countByUser(user);
+        if (totalScenarioCount > 0 && userCompletedCount == totalScenarioCount) {
+            pointsDepositService.depositPoints(
+                    user.getUserId(),
+                    new PointsDepositRequestDto(ALL_SCENARIOS_COMPLETION_REWARD_POINTS, "전체 시나리오 완주 보상")
+            );
+        }
+    }
+    @Transactional
     public AdvanceResDto handleScenarioCompletion(StepContext ctx) {
+
+        // 🔒 user 객체 비관적 잠금 조회
+        Users lockedUser = userRepository.findByIdForUpdate(ctx.user().getId())
+                .orElseThrow(() -> new CommonException(
+                        ErrorCode.ENTITY_NOT_FOUND,
+                        "사용자를 찾을 수 없습니다. id=" + ctx.user().getId()
+                ));
+
         Scenario scenario = ctx.scenario();
         ScenarioProgress progress = ctx.progress();
 
-        // 1) 완료 이력 한 번만 저장
-        ensureCompletedOnce(ctx.user(), scenario);
+        boolean newlyCompleted = ensureCompletedOnceInsertIgnore(lockedUser, scenario);
+        if (newlyCompleted) {
+            grantCompletionRewards(lockedUser); // 중복 로직 제거된 리팩토링 메소드
+        }
 
-        // 2) 진행률 100%로 올리되, 이전 값보다 뒤로 가지 않도록 보장
         double rate = monotonicRate(progress, 100.0);
 
-        // 3) 시작 스텝으로 복귀
         ScenarioStep start = ctx.startStep();
         if (start == null) {
-            throw new CommonException(
-                    ErrorCode.INTERNAL_SERVER_ERROR,
-                    "시작 스텝을 계산할 수 없습니다. scenarioId=" + scenario.getId()
-            );
+            throw new CommonException(ErrorCode.INTERNAL_SERVER_ERROR,
+                    "시작 스텝을 계산할 수 없습니다. scenarioId=" + scenario.getId());
         }
 
         progress.moveToStep(start, rate);
         saveProgress(progress);
 
-        // 4) 프론트에는 COMPLETED 상태만 전달 (다음 스텝은 없음)
         return new AdvanceResDto(AdvanceStatus.COMPLETED, null, null);
     }
+
+
+    /**
+     * 시나리오 완료 보상(포인트) 수동 지급
+     * - ScenarioCompleted 기반으로 최초 1회만 지급
+     */
+    @Transactional
+    public ScenarioRewardResDto claimScenarioReward(Users user, Long scenarioId) {
+
+
+
+        //  user 비관적 잠금 조회
+        Users lockedUser = userRepository.findByIdForUpdate(user.getId())
+                .orElseThrow(() -> new CommonException(
+                        ErrorCode.ENTITY_NOT_FOUND,
+                        "사용자를 찾을 수 없습니다. id=" + user.getId()
+                ));
+
+        Scenario scenario = getScenarioOrThrow(scenarioId);
+
+        // 시나리오를 완료했는지 확인
+        ScenarioProgress progress = progressRepository.findByUserAndScenario(lockedUser, scenario)
+                .orElseThrow(() -> new CommonException(ErrorCode.FORBIDDEN, "아직 시나리오를 시작하지 않았습니다."));
+
+        if (progress.getProgressRate() == null || progress.getProgressRate() < 100.0) {
+            throw new CommonException(ErrorCode.FORBIDDEN, "아직 시나리오를 완료하지 않았습니다.");
+        }
+
+        boolean newlyCompleted = ensureCompletedOnceInsertIgnore(lockedUser, scenario);
+        if (!newlyCompleted) {
+            return new ScenarioRewardResDto(false, "이미 시나리오 보상을 받았습니다.");
+        }
+
+        grantCompletionRewards(lockedUser);
+
+        return new ScenarioRewardResDto(true, "시나리오 완료 보상이 지급되었습니다.");
+
+
+    }
+
+
 
     /**
      * ScenarioStep -> ProgressResumeResDto 매핑
@@ -331,7 +415,8 @@ public class ScenarioProgressService {
             ScenarioProgress progress,
             Optional<StepMeta> metaOpt,
             boolean badBranch,
-            boolean badEnding
+            boolean badEnding,
+            boolean hasChoices
     ) {
         boolean isBad() {
             return badBranch || badEnding;
@@ -364,7 +449,10 @@ public class ScenarioProgressService {
                         .build());
 
         // 5) 메타 정보 한 번만 파싱하여 배드 브랜치/배드 엔딩 여부 확인
-        Optional<StepMeta> metaOpt = contentService.getMeta(current);
+        ContentInfo info = contentService.parseContentInfo(current);
+        Optional<StepMeta> metaOpt = info.meta();
+        boolean hasChoices = info.hasChoices();
+
         boolean badBranch = metaOpt
                 .map(meta -> "bad".equalsIgnoreCase(meta.branch()))
                 .orElse(false);
@@ -372,6 +460,15 @@ public class ScenarioProgressService {
                 .map(meta -> Boolean.TRUE.equals(meta.badEnding()))
                 .orElse(false);
 
-        return new StepRuntime(scenario, byId, current, progress, metaOpt, badBranch, badEnding);
+        boolean hasQuiz = current.getQuiz() != null;
+        if (hasChoices && hasQuiz) {
+            throw new CommonException(
+                    ErrorCode.CONFLICT,
+                    "시나리오 정의 오류: 하나의 스텝에 quiz와 choices가 동시에 존재할 수 없습니다. " +
+                            "scenarioId=" + scenarioId + ", stepId=" + nowStepId
+            );
+        }
+
+        return new StepRuntime(scenario, byId, current, progress, metaOpt, badBranch, badEnding, hasChoices);
     }
 }

@@ -5,7 +5,7 @@ import dev.woori.wooriLearn.common.SortDirection;
 import dev.woori.wooriLearn.config.exception.CommonException;
 import dev.woori.wooriLearn.config.exception.ErrorCode;
 import dev.woori.wooriLearn.domain.account.entity.HistoryFilter;
-import dev.woori.wooriLearn.domain.account.dto.PointsUnifiedHistoryRequestDto;
+import dev.woori.wooriLearn.domain.account.dto.request.PointsUnifiedHistoryRequestDto;
 import dev.woori.wooriLearn.domain.account.entity.PointsHistory;
 import dev.woori.wooriLearn.domain.account.entity.PointsHistoryType;
 import dev.woori.wooriLearn.domain.account.entity.PointsStatus;
@@ -13,7 +13,6 @@ import dev.woori.wooriLearn.domain.account.repository.PointsHistoryQueryReposito
 import dev.woori.wooriLearn.domain.user.entity.Users;
 import dev.woori.wooriLearn.domain.user.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
-import org.springframework.core.env.Environment;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
@@ -29,16 +28,28 @@ public class PointsHistoryService {
 
     private final PointsHistoryQueryRepository queryRepository;
     private final UserRepository userRepository;
-    private final Environment env;
     private final Clock clock;
 
-    public Page<PointsHistory> getUnifiedHistory(String username, PointsUnifiedHistoryRequestDto request) {
+    /**
+     * 처리 순서
+     * 1) 조회 대상 사용자 식별 (관리자면 요청 userId 허용)
+     * 2) 날짜 범위 해석 (직접 입력 또는 기간 기준)
+     * 3) 상태/타입 필터 매핑
+     * 4) 정렬/페이징 구성
+     * 5) 통합 이력 조회 실행
+     */
+    public Page<PointsHistory> getUnifiedHistory(String username, PointsUnifiedHistoryRequestDto request, boolean isAdmin) {
+        // 1) 조회 대상 사용자 식별
+        Long userId = (isAdmin && request.userId() == null)
+                ? null
+                : resolveUserId(username, request.userId(), isAdmin);
 
-        Long userId = resolveUserId(username, request.userId());
-
+        // 2) 날짜 범위 해석
         DateRange range = resolveDateRange(request.startDate(), request.endDate(), request.period());
+        // 3) 상태/타입 필터 매핑
         TypeStatus ts = mapFilter(request.status());
 
+        // 4) 정렬/페이징 구성
         SortDirection sort = request.sort();
         PageRequest pageRequest = PageRequest.of(
                 request.page() - 1,
@@ -46,6 +57,7 @@ public class PointsHistoryService {
                 sort.toSort("createdAt")
         );
 
+        // 5) 통합 이력 조회 실행
         return queryRepository.findAllByFilters(
                 userId,
                 ts.type(),
@@ -56,21 +68,26 @@ public class PointsHistoryService {
         );
     }
 
-    private Long resolveUserId(String username, Long requestUserId) {
-        if (requestUserId != null) return requestUserId;
+    private Long resolveUserId(String username, Long requestUserId, boolean isAdmin) {
+        if (requestUserId != null) {
+            if (!isAdmin) {
+                throw new CommonException(ErrorCode.FORBIDDEN, "다른 사용자의 포인트 이력을 조회할 권한이 없습니다.");
+            }
+            return requestUserId;
+        }
         if (username == null || username.isEmpty()) {
             throw new CommonException(ErrorCode.INVALID_REQUEST, "userId or authenticated username is required");
         }
-        String actualUsername = env.acceptsProfiles("dev") ? "testuser" : username;
-        return userRepository.findByUserId(actualUsername)
+        return userRepository.findByUserId(username)
                 .map(Users::getId)
-                .orElseThrow(() -> new CommonException(ErrorCode.ENTITY_NOT_FOUND, "사용자를 찾을 수 없습니다. userId=" + actualUsername));
+                .orElseThrow(() -> new CommonException(ErrorCode.ENTITY_NOT_FOUND, "사용자를 찾을 수 없습니다. userId=" + username));
     }
 
     private TypeStatus mapFilter(HistoryFilter filter) {
         if (filter == null || filter == HistoryFilter.ALL) return new TypeStatus(null, null);
         return switch (filter) {
             case DEPOSIT -> new TypeStatus(PointsHistoryType.DEPOSIT, null);
+            case WITHDRAW -> new TypeStatus(PointsHistoryType.WITHDRAW, null);
             case WITHDRAW_APPLY -> new TypeStatus(PointsHistoryType.WITHDRAW, PointsStatus.APPLY);
             case WITHDRAW_FAILED -> new TypeStatus(PointsHistoryType.WITHDRAW, PointsStatus.FAILED);
             case WITHDRAW_SUCCESS -> new TypeStatus(PointsHistoryType.WITHDRAW, PointsStatus.SUCCESS);

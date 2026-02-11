@@ -31,7 +31,7 @@ public class StepProcessorResolver {
         ScenarioStep step = ctx.current();
 
         // 1) CHOICE 스텝
-        if (step.getType() == StepType.CHOICE) {
+        if (ctx.hasChoices()) {
             return choiceStepProcessor;
         }
 
