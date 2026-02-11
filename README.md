@@ -61,6 +61,8 @@ UNIQUE 제약 조건을 통한 중복 트랜잭션 사전 차단
 
 성능 개선과 보안 리스크를 동시에 고려한 구조
 
+평균 응답 시간 약 3초대 -> 약 1초대로 개선
+
 ### 3. 운영 리스크를 줄이기 위한 CI/CD 구조
 
 Jenkins 기반 자동 배포 파이프라인 구축
@@ -69,7 +71,9 @@ Jenkins 기반 자동 배포 파이프라인 구축
 
 온프레미스–클라우드 분리 설계로 민감 정보 보호
 
-반복 수동 배포 제거로 배포 리드타임 단축
+수동 배포 평균 20분 → 자동화 후 7분
+
+개발 집중도 개선
 
 # ● Testing & Stability
 
@@ -77,7 +81,9 @@ Jenkins 기반 자동 배포 파이프라인 구축
 
 <img width="908" height="398" alt="Image" src="https://github.com/user-attachments/assets/bccbec70-70bc-4eee-83b7-8741655e5f0b" />
 
-● Tech Stack
+# ● Tech Stack
 
 <img width="870" height="356" alt="Image" src="https://github.com/user-attachments/assets/4ee0f30c-9941-46ee-a5c5-cd6a7ea8cfbd" />
 
+### Backend Repository (My contribution)
+[https://github.com/orgs/woori-fisa-final-project/repositories](https://github.com/woori-fisa-final-project/woori-learn-server)
