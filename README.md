@@ -1,3 +1,7 @@
+# Original Repository
+[[https://github.com/orgs/woori-fisa-final-project/repositories](https://github.com/woori-fisa-final-project/woori-learn-server)
+](https://github.com/woori-fisa-final-project)
+
 # 우리런 (WeLearn)
 
 실제 금융 업무 흐름을 기반으로 설계된 시나리오형 금융 학습 플랫폼
@@ -85,5 +89,3 @@ Jenkins 기반 자동 배포 파이프라인 구축
 
 <img width="870" height="356" alt="Image" src="https://github.com/user-attachments/assets/4ee0f30c-9941-46ee-a5c5-cd6a7ea8cfbd" />
 
-### Backend Repository (My contribution)
-[https://github.com/orgs/woori-fisa-final-project/repositories](https://github.com/woori-fisa-final-project/woori-learn-server)
